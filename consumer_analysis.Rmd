@@ -1,0 +1,190 @@
+---
+title: "How does change in page's background color affect the conversion rate?"
+author: "Tomasz Baczkun"
+date: "2025-11-10"
+output: pdf_document
+Data source: "https://www.kaggle.com/datasets/adarsh0806/ab-testing-practice?resource=download"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+Data source: https://www.kaggle.com/datasets/adarsh0806/ab-testing-practice?resource=download 
+
+
+```{r, include = F}
+library(dplyr)
+library(here)
+library(ggplot2)
+library(gridExtra)
+library(car)
+library(patchwork)
+```
+
+```{r, include = F}
+path = here('data/clean_data.rds')
+df = readRDS(path)
+```
+
+### Introduction
+
+Company X in United Kingdom was interested whether changing the background color of their website from white to black would have an effect on the customer conversion rates. In this analysis, I answer this question, provide the extent of the effect and behavioural interpretation. 
+
+At the top, I provided an overview of the customer information available (age, sex, and many more relevant variables were not available).
+
+
+
+
+```{r, warning = F, fig.width=12, fig.height=5}
+df_cat = subset(df, select = (-c(User.ID, Time.Spent, Page.Views, Conversion, Group)))
+
+d_plots = list()
+
+for(name in names(df_cat)){
+  p <- ggplot(df_cat, aes_string(x = name, fill = name)) + geom_bar() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_fill_brewer(palette = 'Pastel2') +
+    theme_minimal()
+  d_plots[[name]] <- p
+}
+
+
+#do.call(grid.arrange, c(d_plots, ncol = 3))
+wrap_plots(d_plots)
+```
+
+
+### Methodology
+If you are not interested in statistical details of this report, feel free to skip to [results part](#results).
+
+___
+
+I'll assume I have no information on how the experiment as conduct, and hence I cannot assume the random group assignment. To strengthen my claim for causality, I will verify the groups' equality with propensity scores.
+
+Propensity scores are calculated with logistic regression, hence I need to ensure it's assumptions are met:
+
+```{r}
+table(df$Group, df$Device)
+table(df$Group, df$Location)
+```
+
+Covariates are approximately evenly distributed between groups, hence complete separations is ruled out.
+
+As I am operating with the discrete variables, linearity of logit assumptions does not apply. Nonetheless, I should detect potential collinearity.
+
+```{r}
+table(df$Device, df$Location)
+```
+Lack of collinearity is evident.
+
+I proceed to calculating propensity scores:
+
+```{r}
+m_prop = glm(Group ~ Device + Location, data = df, family = 'binomial')
+props = predict(m_prop, type = 'response')
+range(props)
+
+```
+It's clear that covariates are not predictive of groups assignment. 
+
+Now that my data suugests random group assignment, I can proceed to the hypothesis testing. Namely, I want to see if conversion rate differs for people visiting the website with changed (black) background vs old (white) background. For that purpose, I will use Fisher's Exact Test.
+
+
+
+```{r}
+test_mat = as.matrix(table(df$Group, df$Conversion))
+test_mat[,c(1,2)] = test_mat[,c(2,1)]
+colnames(test_mat) = c('Success', 'Failure')
+test_mat[c(1,2), ] = test_mat[c(2,1), ]
+rownames(test_mat) = c('Black', 'White') #ensuring that matrix is in line with fisher.test interpretation method
+fisher.test(test_mat, alternative = 'two.sided', simulate.p.value = T)
+
+```
+___
+
+### Results
+
+
+
+
+
+
+
+
+```{r, fig.width=12}
+df_test = as.data.frame(test_mat)
+
+df_test$Var1 = factor(df_test$Var1, levels = c('White', 'Black'))
+
+plot1 = ggplot(df_test, aes(x = Var1, y = Freq, fill = Var2)) +
+  geom_bar(stat = 'identity', position = 'fill') +
+  labs(x = 'Group', y = 'Proportion', fill = '', title = 'Success vs Failure per Group') +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c('Success' = 'darkgreen', 'Failure' = 'darkred'))+
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14 ))
+
+plot2 = ggplot(df_test, aes(x = Var1, y = Freq, fill = Var2)) +
+  geom_bar(stat = 'identity', position = 'fill') +
+  coord_cartesian(ylim = c(0.8657, 1)) +
+  labs(x = 'Group', y = 'Proportion', fill = '', title = 'Zoom in') +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c('Success' = 'darkgreen', 'Failure' = 'darkred'))+
+  theme_minimal() +
+   theme(
+    plot.title = element_text(hjust = 0.5, size = 14)
+  )
+
+wrap_plots(list(plot1, plot2))
+```
+
+**There is evidence that people who entered the website with new, black background converse more than people who entered website with a white background.**
+
+Visitors to the black-background site have about 3 times the odds of converting compared to visitors to the white-background site. In other words, using a black background seems to significantly boost conversions. However, there are many possible explanations of why exactly.
+
+- people simply prefer the black color as a website background
+- feeling of novelty led customers to make a purchase
+- the background made website more readable
+- if Company X sells luxury products, black color might have given a 'premium feel'
+- **the experiment might have been conducted in low-light setting**
+- **other change in design was made simultaneously**
+
+
+While the first 4 possible reasons are harmless, **the last 2 explanations are dangerous**. If true, they would indicate that there is no proof that background color change is beneficial for the sales, and there isn't enough evidence to invest money in it. **Until they are ruled out, I advise against changing the background color, to prevent fruitless expenses**.
+
+
+As a final step, I will provide some insight for advertising team to see how conversion is related to time spent on a website and page views.
+
+```{r}
+time.spent.c = df[df$Conversion == 'Yes', 'Time.Spent']
+time.spent.noc = df[df$Conversion == 'No', 'Time.Spent']
+page.views.c = df[df$Conversion == 'Yes', 'Page.Views']
+page.views.noc = df[df$Conversion == 'No', 'Page.Views']
+
+par(mfrow = c(2,2))
+hist(time.spent.c, 100, col = 'darkblue', xlab = ' ', main = 'Time Spent (Conversed)')
+hist(time.spent.noc, 100, col = 'darkblue', xlab = ' ', main = 'Time Spent (Did Not Converse)')
+hist(page.views.c, 100, col = 'lightpink', xlab = ' ', main = 'Page Views (Conversed)')
+hist(page.views.noc, 100, col = 'lightpink', xlab = ' ', main = 'Page Views (Did Not Converse)')
+```
+
+There are no apparent differences between clients who conversed and who did not converse with respect to page views and time spent. Nonetheless, according to the **mere-exposure effect**, both of these factors can result in increased coversion rates in the future. Hence, here is how page views and time spent differ between the background groups.
+
+```{r}
+time.spent.a = df[df$Group == 'A', 'Time.Spent']
+time.spent.b = df[df$Group == 'B', 'Time.Spent']
+page.views.a = df[df$Group == 'A', 'Page.Views']
+page.views.b = df[df$Group == 'B', 'Page.Views']
+
+par(mfrow = c(2,2))
+hist(time.spent.a, 100, col = 'white', xlab = ' ', main = 'Time Spent (White BG)')
+hist(time.spent.b, 100, col = 'black', xlab = ' ', main = 'Time Spent (Black BG)')
+hist(page.views.a, 100, col = 'white', xlab = ' ', main = 'Page Views (White BG)')
+hist(page.views.b, 100,  col = 'black', xlab = ' ', main = 'Page Views (Black BG)')
+
+```
+
+The change of background does not seem to affect the exposure anyhow.
+
+###  In sum: using a black background seems to [significantly boost conversions](#results). However, [certain possibilities](#results) should be ruled out before fully dedicating to the change
